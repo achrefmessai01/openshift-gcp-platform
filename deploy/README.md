@@ -39,8 +39,9 @@ Offline validation (what CI runs):
 ```bash
 oc kustomize deploy/overlays/prod | kubeconform -strict -summary \
   -schema-location default \
-  -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+  -schema-location 'deploy/schemas/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
 ```
 
-The second schema location provides the OpenShift `Route` and the Prometheus Operator
-`ServiceMonitor` / `PrometheusRule` CRD schemas.
+The second schema location holds the OpenShift `Route` and the Prometheus Operator
+`ServiceMonitor` / `PrometheusRule` CRD schemas, generated from the upstream CRDs with
+`tools/crd2schema.py` (see [schemas/README.md](schemas/README.md)).

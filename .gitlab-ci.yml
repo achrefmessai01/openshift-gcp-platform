@@ -25,8 +25,8 @@ variables:
   PYTHON_IMAGE: python:3.12-slim
   TERRAFORM_IMAGE: hashicorp/terraform:1.9
   OC_IMAGE: quay.io/openshift/origin-cli:4.16
-  KUBECONFORM_SCHEMAS: >-
-    https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
+  # CRD schemas vendored in deploy/schemas (see deploy/schemas/README.md)
+  KUBECONFORM_SCHEMAS: "deploy/schemas/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
 
 workflow:
   rules:

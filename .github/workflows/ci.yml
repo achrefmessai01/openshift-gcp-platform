@@ -60,10 +60,7 @@ jobs:
           curl -sSLo kubeconform.tar.gz https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz
           tar -xzf kubeconform.tar.gz kubeconform
           sudo mv kubeconform /usr/local/bin/kubeconform
-      - name: Validate every overlay against Kubernetes and OpenShift/Prometheus CRD schemas
-        env:
-          CRD_SCHEMAS: >-
-            https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
+      - name: Validate every overlay against Kubernetes and vendored OpenShift/Prometheus CRD schemas
         run: |
           set -euo pipefail
           for env in dev staging prod; do
@@ -71,7 +68,7 @@ jobs:
             kubectl kustomize "deploy/overlays/${env}" | kubeconform -strict -summary \
               -kubernetes-version 1.30.0 \
               -schema-location default \
-              -schema-location "${CRD_SCHEMAS}"
+              -schema-location 'deploy/schemas/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
           done
 
   ansible:
