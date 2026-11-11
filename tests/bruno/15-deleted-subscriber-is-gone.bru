@@ -1,0 +1,18 @@
+meta {
+  name: 15 Deleted subscriber is gone
+  type: http
+  seq: 15
+}
+
+get {
+  url: {{baseUrl}}/api/v1/subscribers/{{msisdn}}
+  body: none
+  auth: none
+}
+
+tests {
+  test("unknown subscriber returns 404", function () {
+    expect(res.getStatus()).to.equal(404);
+    expect(res.getBody().title).to.equal("subscriber not found");
+  });
+}

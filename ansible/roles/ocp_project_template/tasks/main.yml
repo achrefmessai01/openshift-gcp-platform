@@ -1,0 +1,32 @@
+---
+# Every project created through `oc new-project` / the console gets network isolation,
+# a quota and default limits from this template.
+
+- name: Create or update the project request template
+  kubernetes.core.k8s:
+    state: present
+    template: project-request.yaml.j2
+
+- name: Point the project configuration to the template
+  kubernetes.core.k8s:
+    state: patched
+    api_version: config.openshift.io/v1
+    kind: Project
+    name: cluster
+    definition:
+      spec:
+        projectRequestTemplate:
+          name: project-request
+
+- name: Wait for the apiserver operator to roll out the new configuration
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: ClusterOperator
+    name: openshift-apiserver
+  register: apiserver_co
+  until: >-
+    apiserver_co.resources | length > 0 and
+    (apiserver_co.resources[0].status.conditions
+      | selectattr('type', 'equalto', 'Progressing') | map(attribute='status') | first) == 'False'
+  retries: 30
+  delay: 10

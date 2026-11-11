@@ -1,0 +1,24 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: subscriber-api
+  annotations:
+    # HAProxy router tuning: short timeouts for an API, HSTS once TLS is in place.
+    haproxy.router.openshift.io/timeout: 30s
+    haproxy.router.openshift.io/hsts_header: max-age=31536000;includeSubDomains
+    haproxy.router.openshift.io/balance: roundrobin
+spec:
+  # host is left empty in the base: the router generates <name>-<namespace>.<apps-domain>;
+  # production pins an explicit host in its overlay.
+  to:
+    kind: Service
+    name: subscriber-api
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    # Edge termination: the router terminates TLS with the cluster ingress wildcard
+    # certificate; plain HTTP is redirected to HTTPS.
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

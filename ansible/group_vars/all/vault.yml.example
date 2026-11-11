@@ -1,0 +1,7 @@
+---
+# Copy to vault.yml, fill in, then encrypt:
+#   ansible-vault encrypt group_vars/all/vault.yml
+# vault.yml is git-ignored; only the encrypted file may be committed.
+vault_platform_admin_password: change-me
+vault_integrator_password: change-me
+vault_alertmanager_webhook_url: ""

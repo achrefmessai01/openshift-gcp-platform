@@ -1,0 +1,53 @@
+---
+# Persistent platform monitoring, user-workload monitoring (ServiceMonitor / PrometheusRule
+# in application namespaces) and an Alertmanager receiver for the platform team.
+
+- name: Configure cluster monitoring (persistence, retention, user workload monitoring)
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: cluster-monitoring-config
+        namespace: openshift-monitoring
+      data:
+        config.yaml: "{{ lookup('ansible.builtin.template', 'cluster-monitoring-config.yaml.j2') }}"
+
+- name: Configure user workload monitoring (retention, persistence)
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: user-workload-monitoring-config
+        namespace: openshift-user-workload-monitoring
+      data:
+        config.yaml: "{{ lookup('ansible.builtin.template', 'user-workload-monitoring-config.yaml.j2') }}"
+
+- name: Configure the Alertmanager receiver
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: alertmanager-main
+        namespace: openshift-monitoring
+      type: Opaque
+      stringData:
+        alertmanager.yaml: "{{ lookup('ansible.builtin.template', 'alertmanager.yaml.j2') }}"
+  when: monitoring.alertmanager_webhook_url | length > 0
+  no_log: true
+
+- name: Wait for the user-workload Prometheus to be ready
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: StatefulSet
+    name: prometheus-user-workload
+    namespace: openshift-user-workload-monitoring
+  register: uwm
+  until: uwm.resources | length > 0 and (uwm.resources[0].status.readyReplicas | default(0)) >= 1
+  retries: 30
+  delay: 10

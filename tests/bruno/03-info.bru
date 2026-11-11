@@ -1,0 +1,22 @@
+meta {
+  name: 03 Info
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/api/v1/info
+  body: none
+  auth: none
+}
+
+tests {
+  test("service is subscriber-api", function () {
+    expect(res.getStatus()).to.equal(200);
+    expect(res.getBody().service).to.equal("subscriber-api");
+  });
+  test("version and hostname are reported", function () {
+    expect(res.getBody().version).to.be.a("string").that.is.not.empty;
+    expect(res.getBody().hostname).to.be.a("string").that.is.not.empty;
+  });
+}

@@ -1,0 +1,16 @@
+enableUserWorkload: true
+prometheusK8s:
+  retention: {{ monitoring.retention }}
+  volumeClaimTemplate:
+    spec:
+      storageClassName: {{ monitoring.storage_class }}
+      resources:
+        requests:
+          storage: {{ monitoring.prometheus_storage }}
+alertmanagerMain:
+  volumeClaimTemplate:
+    spec:
+      storageClassName: {{ monitoring.storage_class }}
+      resources:
+        requests:
+          storage: {{ monitoring.alertmanager_storage }}

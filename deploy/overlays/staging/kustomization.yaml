@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: subscriber-api-staging
+
+resources:
+  - ../../base
+
+labels:
+  - includeSelectors: false
+    pairs:
+      environment: staging
+
+configMapGenerator:
+  - name: subscriber-api-config
+    behavior: merge
+    literals:
+      - APP_ENV=staging
+      - LOG_LEVEL=INFO
+
+# Staging runs exactly the release candidate that production will receive.
+images:
+  - name: ghcr.io/achrefmessai01/subscriber-api
+    newTag: v0.1.0

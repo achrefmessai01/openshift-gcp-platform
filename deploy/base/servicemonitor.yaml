@@ -1,0 +1,13 @@
+# Scraped by OpenShift user-workload monitoring (enabled by the ansible role ocp_monitoring).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: subscriber-api
+spec:
+  selector:
+    matchLabels: {}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s

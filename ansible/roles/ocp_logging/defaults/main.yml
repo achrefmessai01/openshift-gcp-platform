@@ -1,0 +1,10 @@
+---
+logging:
+  enabled: true
+  namespace: elastic-system
+  version: "8.15.3"
+  storage_class: standard-csi
+  es_nodes: 1
+  es_storage: 50Gi
+  es_memory: 2Gi
+  es_heap: 1g

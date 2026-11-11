@@ -1,0 +1,15 @@
+---
+project_template:
+  quota:
+    pods: "50"
+    requests_cpu: "4"
+    requests_memory: 8Gi
+    limits_memory: 16Gi
+    persistentvolumeclaims: "10"
+    requests_storage: 100Gi
+  limits:
+    default_cpu: 250m
+    default_memory: 256Mi
+    default_request_cpu: 50m
+    default_request_memory: 128Mi
+    max_memory: 4Gi

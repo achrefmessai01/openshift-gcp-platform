@@ -1,0 +1,22 @@
+meta {
+  name: 13 Suspend subscriber
+  type: http
+  seq: 13
+}
+
+post {
+  url: {{baseUrl}}/api/v1/subscribers/{{msisdn}}/suspend
+  body: none
+  auth: none
+}
+
+headers {
+  X-API-Key: {{apiKey}}
+}
+
+tests {
+  test("subscriber is suspended", function () {
+    expect(res.getStatus()).to.equal(200);
+    expect(res.getBody().status).to.equal("SUSPENDED");
+  });
+}

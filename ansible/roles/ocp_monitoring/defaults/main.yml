@@ -1,0 +1,9 @@
+---
+monitoring:
+  storage_class: standard-csi
+  retention: 15d
+  prometheus_storage: 50Gi
+  alertmanager_storage: 5Gi
+  user_workload_retention: 7d
+  user_workload_storage: 20Gi
+  alertmanager_webhook_url: ""

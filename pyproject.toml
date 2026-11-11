@@ -1,0 +1,15 @@
+# Repository-wide Python tooling configuration (the application has its own packaging
+# metadata in app/subscriber-api/pyproject.toml).
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = [".venv", "reports"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["RUF012"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's declarative style calls Query()/Depends() in defaults by design.
+extend-immutable-calls = ["fastapi.Query", "fastapi.Depends"]

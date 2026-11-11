@@ -1,0 +1,180 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/subscriber-api
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  python:
+    name: lint, flow matrix, unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install tooling
+        run: pip install --quiet ruff yamllint pyyaml "./app/subscriber-api[dev]"
+      - name: ruff
+        run: ruff check .
+      - name: yamllint
+        run: yamllint -c .yamllint.yml .
+      - name: Flow matrix is valid and its document is up to date
+        run: python tools/flowmatrix.py check
+      - name: Unit tests
+        run: pytest app/subscriber-api
+
+  terraform:
+    name: terraform fmt & validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+      - run: terraform fmt -check -recursive -diff
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate -no-color
+
+  manifests:
+    name: kustomize build & kubeconform
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install kubeconform
+        run: |
+          curl -sSLo kubeconform.tar.gz https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz
+          tar -xzf kubeconform.tar.gz kubeconform
+          sudo mv kubeconform /usr/local/bin/kubeconform
+      - name: Validate every overlay against Kubernetes and OpenShift/Prometheus CRD schemas
+        env:
+          CRD_SCHEMAS: >-
+            https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
+        run: |
+          set -euo pipefail
+          for env in dev staging prod; do
+            echo "== overlay ${env}"
+            kubectl kustomize "deploy/overlays/${env}" | kubeconform -strict -summary \
+              -kubernetes-version 1.30.0 \
+              -schema-location default \
+              -schema-location "${CRD_SCHEMAS}"
+          done
+
+  ansible:
+    name: ansible syntax & lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install ansible-core, ansible-lint and collections
+        run: |
+          pip install --quiet -r ansible/requirements.txt
+          ansible-galaxy collection install -r ansible/requirements.yml
+      - name: Syntax check
+        working-directory: ansible
+        run: ansible-playbook --syntax-check site.yml
+      - name: ansible-lint
+        run: ansible-lint
+
+  acceptance:
+    name: container + Robot Framework + Bruno + JMeter
+    needs: [python]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install Robot Framework
+        run: pip install --quiet -r tests/robot/requirements.txt
+      - name: Build the image
+        run: docker build -t subscriber-api:ci -f app/subscriber-api/Containerfile app/subscriber-api
+      - name: Run the container the way OpenShift does (arbitrary UID, group 0, read-only root FS)
+        run: |
+          docker run -d --name api -p 8080:8080 --user 1000810000:0 --read-only --tmpfs /tmp \
+            -e API_KEY=ci-key -e APP_ENV=ci subscriber-api:ci
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8080/readyz && break
+            sleep 1
+          done
+          curl -sf http://localhost:8080/api/v1/info
+      - name: Robot Framework acceptance (technical acceptance record)
+        run: |
+          python tools/acceptance.py --base-url http://localhost:8080 --env ci --expected-env ci \
+            --api-key ci-key --out reports/ci
+      - name: Bruno collection
+        working-directory: tests/bruno
+        run: npx --yes @usebruno/cli run --env local --env-var apiKey=ci-key
+      - name: JMeter smoke load (20 users, 30 s) and thresholds
+        run: |
+          curl -sSLo jmeter.tgz https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-5.6.3.tgz
+          tar -xzf jmeter.tgz
+          apache-jmeter-5.6.3/bin/jmeter -n -t tests/jmeter/subscriber-api-smoke.jmx \
+            -Jhost=localhost -Jport=8080 -Jthreads=20 -Jrampup=5 -Jduration=30 -JapiKey=ci-key \
+            -l reports/ci/jmeter.jtl -j reports/ci/jmeter.log
+          python tools/jmeter_gate.py reports/ci/jmeter.jtl --max-error-rate 1 --max-p95-ms 500 | tee reports/ci/jmeter-gate.md
+      - name: Container logs
+        if: always()
+        run: docker logs api
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: acceptance-reports
+          path: reports/ci
+
+  image:
+    name: build, push & scan image
+    needs: [acceptance, manifests, terraform, ansible]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,prefix=sha-
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+      - uses: docker/build-push-action@v6
+        with:
+          context: app/subscriber-api
+          file: app/subscriber-api/Containerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: APP_VERSION=${{ steps.meta.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Trivy CVE gate (critical, fixable)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"

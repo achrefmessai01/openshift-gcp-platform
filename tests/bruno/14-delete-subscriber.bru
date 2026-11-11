@@ -1,0 +1,21 @@
+meta {
+  name: 14 Delete subscriber
+  type: http
+  seq: 14
+}
+
+delete {
+  url: {{baseUrl}}/api/v1/subscribers/{{msisdn}}
+  body: none
+  auth: none
+}
+
+headers {
+  X-API-Key: {{apiKey}}
+}
+
+tests {
+  test("subscriber is deleted", function () {
+    expect(res.getStatus()).to.equal(204);
+  });
+}

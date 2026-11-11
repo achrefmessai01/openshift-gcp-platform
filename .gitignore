@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Terraform
+terraform/.terraform/
+terraform/*.tfvars
+!terraform/terraform.tfvars.example
+terraform/*.tfplan
+terraform/plan.txt
+terraform/outputs.json
+terraform/*_override.tf
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+
+# OpenShift installer working directories (contain credentials)
+install/*/
+!install/README.md
+
+# Ansible
+ansible/group_vars/all/vault.yml
+ansible/collections/
+*.retry
+
+# Test outputs and acceptance records
+reports/
+output.xml
+log.html
+report.html
+xunit.xml
+*.jtl
+
+# Node
+node_modules/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

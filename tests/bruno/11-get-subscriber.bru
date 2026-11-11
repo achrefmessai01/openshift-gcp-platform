@@ -1,0 +1,18 @@
+meta {
+  name: 11 Get subscriber
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{baseUrl}}/api/v1/subscribers/{{msisdn}}
+  body: none
+  auth: none
+}
+
+tests {
+  test("subscriber can be read back", function () {
+    expect(res.getStatus()).to.equal(200);
+    expect(res.getBody().plan).to.equal("PREPAID_5GB");
+  });
+}

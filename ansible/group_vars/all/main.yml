@@ -1,0 +1,59 @@
+---
+# Day-2 configuration values. Secrets live in vault.yml (see vault.yml.example).
+
+cluster_name: ocp
+default_kubeconfig: "{{ playbook_dir }}/../install/{{ cluster_name }}/auth/kubeconfig"
+kubeconfig: "{{ lookup('ansible.builtin.env', 'KUBECONFIG') | default(default_kubeconfig, true) }}"
+
+# --- identity ------------------------------------------------------------------------------
+htpasswd_users:
+  - name: platform-admin
+    password: "{{ vault_platform_admin_password }}"
+  - name: integrator
+    password: "{{ vault_integrator_password }}"
+admin_group_members:
+  - platform-admin
+access_token_max_age_seconds: 28800
+
+# --- default project template -------------------------------------------------------------
+project_template:
+  quota:
+    pods: "50"
+    requests_cpu: "4"
+    requests_memory: 8Gi
+    limits_memory: 16Gi
+    persistentvolumeclaims: "10"
+    requests_storage: 100Gi
+  limits:
+    default_cpu: 250m
+    default_memory: 256Mi
+    default_request_cpu: 50m
+    default_request_memory: 128Mi
+    max_memory: 4Gi
+
+# --- monitoring -----------------------------------------------------------------------------
+monitoring:
+  storage_class: standard-csi
+  retention: 15d
+  prometheus_storage: 50Gi
+  alertmanager_storage: 5Gi
+  user_workload_retention: 7d
+  user_workload_storage: 20Gi
+  alertmanager_webhook_url: "{{ vault_alertmanager_webhook_url | default('') }}"
+
+# --- image registry -------------------------------------------------------------------------
+registry:
+  bucket: "{{ lookup('ansible.builtin.env', 'REGISTRY_BUCKET') | default('', true) }}"
+  region: europe-west1
+  replicas: 2
+
+# --- logging (Elastic Cloud on Kubernetes: Elasticsearch, Kibana, Filebeat) -----------------
+logging:
+  enabled: true
+  namespace: elastic-system
+  version: "8.15.3"
+  storage_class: standard-csi
+  es_nodes: 1
+  es_storage: 50Gi
+  es_memory: 2Gi
+  es_heap: 1g

@@ -1,0 +1,9 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: subscriber-api
+spec:
+  # Keeps at least one replica during node drains (cluster upgrades, MachineConfig rollouts).
+  minAvailable: 1
+  selector:
+    matchLabels: {}

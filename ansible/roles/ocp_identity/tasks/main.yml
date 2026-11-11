@@ -1,0 +1,88 @@
+---
+# Local htpasswd identity provider for the platform team (first-day access before the
+# corporate IdP is connected), an admin group and its cluster-admin binding.
+
+- name: Create the htpasswd file with the platform users
+  community.general.htpasswd:
+    path: "{{ htpasswd_file }}"
+    name: "{{ item.name }}"
+    password: "{{ item.password }}"
+    hash_scheme: bcrypt
+    mode: "0600"
+  loop: "{{ htpasswd_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+
+- name: Create or update the htpasswd secret in openshift-config
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: htpass-secret
+        namespace: openshift-config
+      type: Opaque
+      data:
+        htpasswd: "{{ lookup('ansible.builtin.file', htpasswd_file) | b64encode }}"
+  no_log: true
+
+- name: Remove the local htpasswd file
+  ansible.builtin.file:
+    path: "{{ htpasswd_file }}"
+    state: absent
+
+- name: Configure the htpasswd identity provider and token lifetime
+  kubernetes.core.k8s:
+    state: patched
+    api_version: config.openshift.io/v1
+    kind: OAuth
+    name: cluster
+    definition:
+      spec:
+        identityProviders:
+          - name: local-htpasswd
+            mappingMethod: claim
+            type: HTPasswd
+            htpasswd:
+              fileData:
+                name: htpass-secret
+        tokenConfig:
+          accessTokenMaxAgeSeconds: "{{ access_token_max_age_seconds | int }}"
+
+- name: Create the platform-admins group
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: user.openshift.io/v1
+      kind: Group
+      metadata:
+        name: platform-admins
+      users: "{{ admin_group_members }}"
+
+- name: Bind platform-admins to cluster-admin
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: platform-admins-cluster-admin
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: cluster-admin
+      subjects:
+        - apiGroup: rbac.authorization.k8s.io
+          kind: Group
+          name: platform-admins
+
+- name: Remove the temporary kubeadmin user once a real admin exists
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Secret
+    name: kubeadmin
+    namespace: kube-system
+  when: admin_group_members | length > 0

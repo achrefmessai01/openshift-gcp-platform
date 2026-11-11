@@ -1,0 +1,172 @@
+# Flow matrix (matrice de flux) of the OpenShift-on-GCP platform.
+#
+# This file is the reviewed network contract AND the input of the Terraform firewall module:
+# every entry becomes one VPC firewall rule (terraform/modules/firewall). docs/flow-matrix.md
+# is generated from it by `python tools/flowmatrix.py render` and must be committed together.
+#
+# Sources/destinations are either CIDRs or aliases resolved by Terraform:
+#   control_plane      control-plane subnet            (var.control_plane_cidr)
+#   compute            compute / worker subnet         (var.compute_cidr)
+#   admin              administration and CI networks  (var.admin_cidrs)
+#   internet           0.0.0.0/0
+#   gcp_health_checks  Google load balancer health checkers (35.191.0.0/16, 130.211.0.0/22,
+#                      209.85.152.0/22, 209.85.204.0/22)
+#   gcp_iap            Identity-Aware Proxy TCP forwarding (35.235.240.0/20)
+#
+# Port requirements follow the OpenShift 4 documentation, "Installing a cluster on GCP into
+# an existing VPC" (network requirements for user-provisioned networking).
+
+version: 1
+metadata:
+  platform: openshift-gcp-platform
+  owner: platform-team
+  reviewed: "2026-11-11"
+
+aliases:
+  control_plane: Control-plane subnet
+  compute: Compute (worker) subnet
+  admin: Administration and CI networks
+  internet: Any public address
+  gcp_health_checks: Google Cloud load balancer health checkers
+  gcp_iap: Google Identity-Aware Proxy TCP forwarding
+
+flows:
+  - id: FW-001
+    name: api-admin
+    description: OpenShift API (Kubernetes API server) from administration and CI networks
+    direction: INGRESS
+    priority: 1000
+    source: [admin]
+    destination: [control_plane]
+    rules:
+      - {protocol: tcp, ports: ["6443"]}
+    justification: Cluster administration (oc, Ansible), pipeline deployments
+    logging: true
+
+  - id: FW-002
+    name: api-internal
+    description: API server and machine config server from cluster nodes
+    direction: INGRESS
+    priority: 1000
+    source: [control_plane, compute]
+    destination: [control_plane]
+    rules:
+      - {protocol: tcp, ports: ["6443", "22623"]}
+    justification: kubelets reach the API; nodes fetch their ignition from the MCS on 22623
+
+  - id: FW-003
+    name: lb-health-checks
+    description: Google load balancer health checks towards API, MCS and router node ports
+    direction: INGRESS
+    priority: 1000
+    source: [gcp_health_checks]
+    destination: [control_plane, compute]
+    rules:
+      - {protocol: tcp, ports: ["6080", "6443", "22624", "30000-32767"]}
+    justification: Internal/external API load balancers and the ingress load balancer probe the nodes
+
+  - id: FW-004
+    name: etcd
+    description: etcd client and peer traffic between control-plane nodes
+    direction: INGRESS
+    priority: 1000
+    source: [control_plane]
+    destination: [control_plane]
+    rules:
+      - {protocol: tcp, ports: ["2379-2380"]}
+    justification: etcd quorum and API server backend
+
+  - id: FW-005
+    name: control-plane-services
+    description: kube-controller-manager and kube-scheduler endpoints
+    direction: INGRESS
+    priority: 1000
+    source: [control_plane, compute]
+    destination: [control_plane]
+    rules:
+      - {protocol: tcp, ports: ["10257", "10259"]}
+    justification: Health and metrics endpoints of the control-plane components
+
+  - id: FW-006
+    name: cluster-internal
+    description: Node-to-node traffic required by OpenShift (kubelet, host services, overlay, node ports, IPsec)
+    direction: INGRESS
+    priority: 1000
+    source: [control_plane, compute]
+    destination: [control_plane, compute]
+    rules:
+      - {protocol: tcp, ports: ["22", "9000-9999", "10250", "10256", "30000-32767"]}
+      - {protocol: udp, ports: ["4789", "6081", "500", "4500", "9000-9999", "30000-32767"]}
+      - {protocol: esp}
+    justification: Kubelet (10250), host-level metrics (9000-9999), VXLAN/Geneve overlay, IPsec, NodePort services
+
+  - id: FW-007
+    name: ingress-public
+    description: Application traffic to the OpenShift router (HTTP redirected to HTTPS)
+    direction: INGRESS
+    priority: 1000
+    source: [internet]
+    destination: [compute]
+    rules:
+      - {protocol: tcp, ports: ["80", "443"]}
+    justification: Public exposure of Routes (*.apps) through the ingress load balancer
+    logging: true
+
+  - id: FW-008
+    name: ssh-iap
+    description: SSH to nodes and bastion through Identity-Aware Proxy TCP forwarding
+    direction: INGRESS
+    priority: 1000
+    source: [gcp_iap]
+    destination: [control_plane, compute]
+    rules:
+      - {protocol: tcp, ports: ["22"]}
+    justification: Level-3 troubleshooting without public IPs (gcloud compute ssh --tunnel-through-iap)
+    logging: true
+
+  - id: FW-009
+    name: egress-web
+    description: Outbound HTTP/HTTPS from nodes through Cloud NAT
+    direction: EGRESS
+    priority: 1000
+    source: [control_plane, compute]
+    destination: [internet]
+    rules:
+      - {protocol: tcp, ports: ["80", "443"]}
+    justification: Image pulls (quay.io, registry.redhat.io), Red Hat telemetry/OCM, Google APIs, OperatorHub catalogs
+
+  - id: FW-010
+    name: egress-time-dns
+    description: Outbound NTP and DNS
+    direction: EGRESS
+    priority: 1000
+    source: [control_plane, compute]
+    destination: [internet]
+    rules:
+      - {protocol: udp, ports: ["123", "53"]}
+      - {protocol: tcp, ports: ["53"]}
+    justification: Chrony time sync and upstream DNS forwarding (metadata server resolver is implicitly allowed)
+
+  - id: FW-011
+    name: egress-cluster
+    description: All outbound traffic between cluster subnets
+    direction: EGRESS
+    priority: 1000
+    source: [control_plane, compute]
+    destination: [control_plane, compute]
+    rules:
+      - {protocol: all}
+    justification: Mirror of FW-002/004/005/006 on the egress side once default egress is denied
+
+  - id: FW-099
+    name: egress-default-deny
+    description: Deny every other outbound flow (explicit allow-list policy)
+    direction: EGRESS
+    priority: 65000
+    action: deny
+    source: [control_plane, compute]
+    destination: [internet]
+    rules:
+      - {protocol: all}
+    justification: Enforces the matrix; new outbound needs are added above as reviewed flows
+    logging: true

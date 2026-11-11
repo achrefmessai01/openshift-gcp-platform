@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: subscriber-api-config
+data:
+  APP_ENV: base
+  LOG_LEVEL: INFO

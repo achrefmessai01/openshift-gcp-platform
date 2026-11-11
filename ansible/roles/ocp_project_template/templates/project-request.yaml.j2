@@ -1,0 +1,106 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: project-request
+  namespace: openshift-config
+objects:
+  - apiVersion: project.openshift.io/v1
+    kind: Project
+    metadata:
+      name: ${PROJECT_NAME}
+      annotations:
+        openshift.io/description: ${PROJECT_DESCRIPTION}
+        openshift.io/display-name: ${PROJECT_DISPLAYNAME}
+        openshift.io/requester: ${PROJECT_REQUESTING_USER}
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      name: admin
+      namespace: ${PROJECT_NAME}
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: admin
+    subjects:
+      - apiGroup: rbac.authorization.k8s.io
+        kind: User
+        name: ${PROJECT_ADMIN_USER}
+  # Network isolation by default: every new project denies inbound traffic except from the
+  # router, the monitoring stack and its own pods (same contract as deploy/base/networkpolicy.yaml).
+  - apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: default-deny-ingress
+      namespace: ${PROJECT_NAME}
+    spec:
+      podSelector: {}
+      policyTypes: [Ingress]
+  - apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: allow-from-openshift-ingress
+      namespace: ${PROJECT_NAME}
+    spec:
+      podSelector: {}
+      ingress:
+        - from:
+            - namespaceSelector:
+                matchLabels:
+                  policy-group.network.openshift.io/ingress: ""
+  - apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: allow-from-openshift-monitoring
+      namespace: ${PROJECT_NAME}
+    spec:
+      podSelector: {}
+      ingress:
+        - from:
+            - namespaceSelector:
+                matchLabels:
+                  network.openshift.io/policy-group: monitoring
+  - apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: allow-same-namespace
+      namespace: ${PROJECT_NAME}
+    spec:
+      podSelector: {}
+      ingress:
+        - from:
+            - podSelector: {}
+  - apiVersion: v1
+    kind: ResourceQuota
+    metadata:
+      name: project-quota
+      namespace: ${PROJECT_NAME}
+    spec:
+      hard:
+        pods: "{{ project_template.quota.pods }}"
+        requests.cpu: "{{ project_template.quota.requests_cpu }}"
+        requests.memory: {{ project_template.quota.requests_memory }}
+        limits.memory: {{ project_template.quota.limits_memory }}
+        persistentvolumeclaims: "{{ project_template.quota.persistentvolumeclaims }}"
+        requests.storage: {{ project_template.quota.requests_storage }}
+  - apiVersion: v1
+    kind: LimitRange
+    metadata:
+      name: project-limits
+      namespace: ${PROJECT_NAME}
+    spec:
+      limits:
+        - type: Container
+          default:
+            cpu: {{ project_template.limits.default_cpu }}
+            memory: {{ project_template.limits.default_memory }}
+          defaultRequest:
+            cpu: {{ project_template.limits.default_request_cpu }}
+            memory: {{ project_template.limits.default_request_memory }}
+          max:
+            memory: {{ project_template.limits.max_memory }}
+parameters:
+  - name: PROJECT_NAME
+  - name: PROJECT_DISPLAYNAME
+  - name: PROJECT_DESCRIPTION
+  - name: PROJECT_ADMIN_USER
+  - name: PROJECT_REQUESTING_USER

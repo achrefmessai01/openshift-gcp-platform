@@ -1,0 +1,5 @@
+---
+registry:
+  bucket: ""
+  region: europe-west1
+  replicas: 2

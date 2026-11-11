@@ -1,0 +1,384 @@
+# End-to-end delivery chain on GitLab CI:
+#
+#   lint ─ test ─ build ─ plan ─ apply(manual) ─ install(manual) ─ day2 ─ deploy ─ acceptance ─ performance ─ report
+#
+# Infrastructure stages run only on the default branch and are gated by manual jobs with
+# resource groups (one apply at a time). Application stages deploy dev automatically, then
+# staging and prod on manual approval, each followed by the automated technical acceptance.
+#
+# Required CI/CD variables (Settings > CI/CD > Variables, masked/protected):
+#   GOOGLE_CREDENTIALS      installer/CI service-account key (JSON)  - plan/apply/install
+#   TF_STATE_BUCKET         GCS bucket for Terraform state
+#   TFVARS_FILE             path to the tfvars file (file-type variable)
+#   APPS_DOMAIN             apps.<cluster>.<base-domain>
+#   OCP_API_URL             https://api.<cluster>.<base-domain>:6443
+#   OCP_TOKEN_DEV / _STAGING / _PROD   service-account tokens with edit rights per namespace
+#   API_KEY_DEV / _STAGING / _PROD     X-API-Key injected into the application secret
+#   PULL_SECRET, SSH_PUBLIC_KEY, ANSIBLE_VAULT_PASSWORD
+
+stages: [lint, test, build, plan, apply, install, day2, deploy, acceptance, performance, report]
+
+variables:
+  TF_ROOT: terraform
+  TF_IN_AUTOMATION: "true"
+  IMAGE: $CI_REGISTRY_IMAGE/subscriber-api
+  PYTHON_IMAGE: python:3.12-slim
+  TERRAFORM_IMAGE: hashicorp/terraform:1.9
+  OC_IMAGE: quay.io/openshift/origin-cli:4.16
+  KUBECONFORM_SCHEMAS: >-
+    https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+default:
+  interruptible: true
+
+# --- templates --------------------------------------------------------------------------------
+.python:
+  image: $PYTHON_IMAGE
+  before_script:
+    - pip install --quiet -r tests/robot/requirements.txt pyyaml
+
+.terraform:
+  image:
+    name: $TERRAFORM_IMAGE
+    entrypoint: [""]
+  before_script:
+    - cd $TF_ROOT
+    - terraform init -input=false -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="prefix=openshift/$TF_VAR_name"
+  variables:
+    TF_VAR_name: ocp
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: [terraform/**/*, docs/flow-matrix.yaml]
+
+.oc:
+  image:
+    name: $OC_IMAGE
+    entrypoint: [""]
+  before_script:
+    - oc login "$OCP_API_URL" --token="$OCP_TOKEN"
+    - pip3 install --quiet -r tests/robot/requirements.txt
+
+.deploy:
+  extends: .oc
+  stage: deploy
+  script:
+    - export API_KEY="$APP_API_KEY"
+    - scripts/deploy.sh "$ENV_NAME" "$IMAGE_TAG"
+  resource_group: $ENV_NAME
+
+.acceptance:
+  extends: .python
+  stage: acceptance
+  script:
+    - ROUTE_HOST="subscriber-api-subscriber-api-${ENV_NAME}.${APPS_DOMAIN}"
+    - python tools/acceptance.py --base-url "https://${ROUTE_HOST}" --env "$ENV_NAME" --expected-env "$ENV_NAME"
+      --api-key "$APP_API_KEY" --route-host "$ROUTE_HOST" --api-url "$OCP_API_URL"
+      --include smoke --include functional --include security --include observability --include platform
+      --out "reports/$ENV_NAME"
+  artifacts:
+    when: always
+    paths: [reports/$ENV_NAME]
+    reports:
+      junit: reports/$ENV_NAME/xunit.xml
+    expire_in: 90 days
+
+# --- lint --------------------------------------------------------------------------------------
+lint:python:
+  stage: lint
+  image: $PYTHON_IMAGE
+  script:
+    - pip install --quiet ruff yamllint pyyaml
+    - ruff check .
+    - yamllint -c .yamllint.yml .
+    - python tools/flowmatrix.py check
+
+lint:terraform:
+  stage: lint
+  image:
+    name: $TERRAFORM_IMAGE
+    entrypoint: [""]
+  script:
+    - cd $TF_ROOT
+    - terraform fmt -check -recursive -diff
+    - terraform init -backend=false -input=false
+    - terraform validate
+
+lint:manifests:
+  stage: lint
+  image:
+    name: $OC_IMAGE
+    entrypoint: [""]
+  script:
+    - curl -sSLo /tmp/kc.tar.gz https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz
+    - tar -xzf /tmp/kc.tar.gz -C /usr/local/bin kubeconform
+    - |
+      for env in dev staging prod; do
+        oc kustomize "deploy/overlays/$env" | kubeconform -strict -summary \
+          -schema-location default -schema-location "$KUBECONFORM_SCHEMAS"
+      done
+
+lint:ansible:
+  stage: lint
+  image: $PYTHON_IMAGE
+  script:
+    - pip install --quiet -r ansible/requirements.txt
+    - ansible-galaxy collection install -r ansible/requirements.yml
+    - (cd ansible && ansible-playbook --syntax-check site.yml)
+    - ansible-lint
+
+# --- test ---------------------------------------------------------------------------------------
+test:unit:
+  stage: test
+  image: $PYTHON_IMAGE
+  script:
+    - pip install --quiet "./app/subscriber-api[dev]"
+    - pytest app/subscriber-api --junitxml=reports/unit.xml
+  artifacts:
+    reports:
+      junit: reports/unit.xml
+
+# --- build --------------------------------------------------------------------------------------
+build:image:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  script:
+    - /kaniko/executor
+      --context "$CI_PROJECT_DIR/app/subscriber-api"
+      --dockerfile "$CI_PROJECT_DIR/app/subscriber-api/Containerfile"
+      --build-arg "APP_VERSION=${CI_COMMIT_TAG:-$CI_COMMIT_SHORT_SHA}"
+      --destination "$IMAGE:$CI_COMMIT_SHORT_SHA"
+      --destination "$IMAGE:${CI_COMMIT_TAG:-$CI_COMMIT_REF_SLUG}"
+      --cache=true
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: [app/**/*]
+
+build:scan:
+  stage: build
+  needs: [build:image]
+  image:
+    name: aquasec/trivy:latest
+    entrypoint: [""]
+  script:
+    - mkdir -p reports
+    - trivy image --exit-code 0 --severity HIGH --ignore-unfixed --format table "$IMAGE:$CI_COMMIT_SHORT_SHA"
+    - trivy image --exit-code 1 --severity CRITICAL --ignore-unfixed "$IMAGE:$CI_COMMIT_SHORT_SHA"
+    - trivy image --format cyclonedx --output reports/sbom.cdx.json "$IMAGE:$CI_COMMIT_SHORT_SHA"
+  artifacts:
+    paths: [reports/sbom.cdx.json]
+    reports:
+      cyclonedx: reports/sbom.cdx.json
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: [app/**/*]
+
+# --- infrastructure (GCP landing zone) ----------------------------------------------------------
+plan:
+  extends: .terraform
+  stage: plan
+  script:
+    - terraform plan -input=false -out=tfplan -var-file="$TFVARS_FILE"
+    - terraform show -no-color tfplan > plan.txt
+  artifacts:
+    paths: [$TF_ROOT/tfplan, $TF_ROOT/plan.txt]
+    expire_in: 7 days
+
+apply:
+  extends: .terraform
+  stage: apply
+  needs: [plan]
+  script:
+    - terraform apply -input=false tfplan
+    - terraform output -json > outputs.json
+  artifacts:
+    paths: [$TF_ROOT/outputs.json]
+  when: manual
+  resource_group: terraform
+  environment:
+    name: infra/gcp
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# --- OpenShift installation and day-2 ------------------------------------------------------------
+install:cluster:
+  stage: install
+  image: $PYTHON_IMAGE
+  needs: [apply]
+  script:
+    - apt-get update -qq && apt-get install -y -qq jq gettext-base curl >/dev/null
+    - curl -sSL https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-install-linux.tar.gz | tar -xz -C /usr/local/bin openshift-install
+    - echo "$SSH_PUBLIC_KEY" > /tmp/id.pub
+    - PULL_SECRET_FILE="$PULL_SECRET" SSH_PUBLIC_KEY_FILE=/tmp/id.pub install/render-install-config.sh --create
+  artifacts:
+    paths: [install/ocp/auth, install/ocp/metadata.json, install/ocp/install-config.yaml.bak]
+    expire_in: 1 year
+  when: manual
+  resource_group: cluster
+  timeout: 2h
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+day2:ansible:
+  stage: day2
+  image: $PYTHON_IMAGE
+  needs: [install:cluster]
+  script:
+    - apt-get update -qq && apt-get install -y -qq jq >/dev/null
+    - pip install --quiet -r ansible/requirements.txt
+    - ansible-galaxy collection install -r ansible/requirements.yml
+    - export KUBECONFIG="$CI_PROJECT_DIR/install/ocp/auth/kubeconfig"
+    - export REGISTRY_BUCKET="$(jq -r .registry_bucket.value terraform/outputs.json)"
+    - echo "$ANSIBLE_VAULT_PASSWORD" > /tmp/vault-pass
+    - (cd ansible && ansible-playbook site.yml --vault-password-file /tmp/vault-pass)
+  when: manual
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# --- application deployment chain ---------------------------------------------------------------
+deploy:dev:
+  extends: .deploy
+  needs: [build:image, build:scan, lint:manifests]
+  variables:
+    ENV_NAME: dev
+    OCP_TOKEN: $OCP_TOKEN_DEV
+    APP_API_KEY: $API_KEY_DEV
+    IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+  environment:
+    name: dev
+    url: https://subscriber-api-subscriber-api-dev.$APPS_DOMAIN
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+acceptance:dev:
+  extends: .acceptance
+  needs: [deploy:dev]
+  variables:
+    ENV_NAME: dev
+    APP_API_KEY: $API_KEY_DEV
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+deploy:staging:
+  extends: .deploy
+  needs: [acceptance:dev]
+  variables:
+    ENV_NAME: staging
+    OCP_TOKEN: $OCP_TOKEN_STAGING
+    APP_API_KEY: $API_KEY_STAGING
+    IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+  environment:
+    name: staging
+    url: https://subscriber-api-subscriber-api-staging.$APPS_DOMAIN
+  when: manual
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+acceptance:staging:
+  extends: .acceptance
+  needs: [deploy:staging]
+  variables:
+    ENV_NAME: staging
+    APP_API_KEY: $API_KEY_STAGING
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+performance:staging:
+  stage: performance
+  image:
+    name: justb4/jmeter:5.5
+    entrypoint: [""]
+  needs: [acceptance:staging]
+  script:
+    - mkdir -p reports/staging
+    - |
+      jmeter -n -t tests/jmeter/subscriber-api-smoke.jmx -Jprotocol=https -Jport=443 \
+        -Jhost="subscriber-api-subscriber-api-staging.$APPS_DOMAIN" \
+        -Jthreads=20 -Jrampup=10 -Jduration=120 -JapiKey="$API_KEY_STAGING" \
+        -l reports/staging/jmeter.jtl -e -o reports/staging/jmeter-html
+    - python3 tools/jmeter_gate.py reports/staging/jmeter.jtl --max-error-rate 1 --max-p95-ms 500
+      | tee reports/staging/jmeter-gate.md
+  artifacts:
+    when: always
+    paths: [reports/staging]
+    expire_in: 90 days
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+deploy:prod:
+  extends: .deploy
+  needs: [acceptance:staging, performance:staging]
+  variables:
+    ENV_NAME: prod
+    OCP_TOKEN: $OCP_TOKEN_PROD
+    APP_API_KEY: $API_KEY_PROD
+    IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+  environment:
+    name: prod
+    url: https://subscriber-api.apps.ocp.example.com
+  when: manual
+  allow_failure: false
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+acceptance:prod:
+  extends: .acceptance
+  needs: [deploy:prod]
+  variables:
+    ENV_NAME: prod
+    APP_API_KEY: $API_KEY_PROD
+  script:
+    - python tools/acceptance.py --base-url "https://subscriber-api.apps.ocp.example.com" --env prod --expected-env prod
+      --api-key "$APP_API_KEY" --route-host "subscriber-api.apps.ocp.example.com" --include smoke --include platform
+      --out reports/prod
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+rollback:prod:
+  extends: .oc
+  stage: deploy
+  variables:
+    ENV_NAME: prod
+    OCP_TOKEN: $OCP_TOKEN_PROD
+    APP_API_KEY: $API_KEY_PROD
+  script:
+    - export API_KEY="$APP_API_KEY"
+    - scripts/rollback.sh prod
+  when: manual
+  resource_group: prod
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# --- report -------------------------------------------------------------------------------------
+report:acceptance:
+  stage: report
+  image: $PYTHON_IMAGE
+  needs:
+    - job: acceptance:dev
+      optional: true
+    - job: acceptance:staging
+      optional: true
+    - job: performance:staging
+      optional: true
+    - job: acceptance:prod
+      optional: true
+  script:
+    - ls -R reports || true
+    - echo "Acceptance records and JMeter gates are attached as artifacts of this pipeline ($CI_PIPELINE_URL)."
+  artifacts:
+    paths: [reports]
+    expire_in: 1 year
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH

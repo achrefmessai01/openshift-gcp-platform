@@ -1,0 +1,54 @@
+# Alerting rules evaluated by the user-workload Thanos Ruler. Severity and runbook
+# references match docs/operations.md (alert catalogue).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: subscriber-api
+spec:
+  groups:
+    - name: subscriber-api.rules
+      rules:
+        - alert: SubscriberApiDown
+          expr: sum(up{job="subscriber-api"}) == 0 or absent(up{job="subscriber-api"})
+          for: 5m
+          labels:
+            severity: critical
+            service: subscriber-api
+          annotations:
+            summary: "subscriber-api has no healthy target"
+            description: "No subscriber-api pod has been scraped successfully for 5 minutes."
+            runbook_url: "https://github.com/achrefmessai01/openshift-gcp-platform/blob/main/docs/operations.md#subscriberapidown"
+        - alert: SubscriberApiHighErrorRate
+          expr: |
+            sum(rate(http_requests_total{job="subscriber-api", status=~"5.."}[5m]))
+              / sum(rate(http_requests_total{job="subscriber-api"}[5m])) > 0.05
+          for: 10m
+          labels:
+            severity: warning
+            service: subscriber-api
+          annotations:
+            summary: "subscriber-api 5xx ratio above 5%"
+            description: "{{ $value | humanizePercentage }} of requests failed over the last 5 minutes."
+            runbook_url: "https://github.com/achrefmessai01/openshift-gcp-platform/blob/main/docs/operations.md#subscriberapihigherrorrate"
+        - alert: SubscriberApiHighLatency
+          expr: |
+            histogram_quantile(0.95,
+              sum by (le) (rate(http_request_duration_seconds_bucket{job="subscriber-api"}[5m]))) > 0.5
+          for: 10m
+          labels:
+            severity: warning
+            service: subscriber-api
+          annotations:
+            summary: "subscriber-api p95 latency above 500 ms"
+            description: "p95 latency is {{ $value | humanizeDuration }} over the last 5 minutes."
+            runbook_url: "https://github.com/achrefmessai01/openshift-gcp-platform/blob/main/docs/operations.md#subscriberapihighlatency"
+        - alert: SubscriberApiPodRestarting
+          expr: increase(kube_pod_container_status_restarts_total{container="api"}[30m]) > 3
+          for: 0m
+          labels:
+            severity: warning
+            service: subscriber-api
+          annotations:
+            summary: "subscriber-api container restarting"
+            description: "Pod {{ $labels.pod }} restarted more than 3 times in 30 minutes."
+            runbook_url: "https://github.com/achrefmessai01/openshift-gcp-platform/blob/main/docs/operations.md#subscriberapipodrestarting"

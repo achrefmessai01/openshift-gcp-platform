@@ -1,0 +1,10 @@
+prometheus:
+  retention: {{ monitoring.user_workload_retention }}
+  volumeClaimTemplate:
+    spec:
+      storageClassName: {{ monitoring.storage_class }}
+      resources:
+        requests:
+          storage: {{ monitoring.user_workload_storage }}
+thanosRuler:
+  retention: {{ monitoring.user_workload_retention }}

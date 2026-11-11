@@ -1,0 +1,28 @@
+meta {
+  name: 20 Invalid MSISDN is rejected
+  type: http
+  seq: 20
+}
+
+post {
+  url: {{baseUrl}}/api/v1/subscribers
+  body: json
+  auth: none
+}
+
+headers {
+  X-API-Key: {{apiKey}}
+}
+
+body:json {
+  {
+    "msisdn": "0021650123456",
+    "plan": "PREPAID_5GB"
+  }
+}
+
+tests {
+  test("validation error returns 422", function () {
+    expect(res.getStatus()).to.equal(422);
+  });
+}

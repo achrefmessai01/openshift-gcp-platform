@@ -1,0 +1,24 @@
+---
+profile: moderate
+offline: false
+skip_list:
+  # Role settings are shared dictionaries (monitoring, registry, logging, project_template)
+  # defined once in group_vars and overridable per role; prefixing them per role would
+  # duplicate the configuration surface for no gain.
+  - var-naming[no-role-prefix]
+exclude_paths:
+  - .git/
+  - .github/
+  - .gitlab-ci.yml
+  - deploy/
+  - terraform/
+  - tests/
+  - app/
+  - docs/
+  - reports/
+kinds:
+  - playbook: "ansible/site.yml"
+  - tasks: "ansible/roles/*/tasks/*.yml"
+  - vars: "ansible/group_vars/**/*.yml"
+  - requirements: "ansible/requirements.yml"
+  - inventory: "ansible/inventory/*.yml"

@@ -1,0 +1,39 @@
+---
+# Day-2 configuration of the OpenShift cluster, idempotent and re-runnable.
+#
+#   ansible-playbook site.yml                      # everything
+#   ansible-playbook site.yml --tags monitoring    # one area
+#   ansible-playbook site.yml --check --diff       # dry run
+- name: Day-2 configuration of the OpenShift cluster
+  hosts: localhost
+  gather_facts: false
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+
+  pre_tasks:
+    - name: Read the cluster version (checks API reachability and credentials)
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: ClusterVersion
+        name: version
+      register: clusterversion
+      failed_when: clusterversion.resources | length == 0
+      tags: [always]
+
+    - name: Show the cluster version
+      ansible.builtin.debug:
+        msg: "OpenShift {{ clusterversion.resources[0].status.desired.version }} ({{ clusterversion.resources[0].spec.clusterID }})"
+      tags: [always]
+
+  roles:
+    - role: ocp_identity
+      tags: [identity]
+    - role: ocp_project_template
+      tags: [projects]
+    - role: ocp_monitoring
+      tags: [monitoring]
+    - role: ocp_registry
+      tags: [registry]
+    - role: ocp_logging
+      tags: [logging]
+      when: logging.enabled | bool

@@ -1,0 +1,42 @@
+---
+# Internal image registry backed by the GCS bucket created by Terraform (output registry_bucket).
+# On GCP the registry operator obtains its storage credentials from the Cloud Credential
+# Operator; only the bucket needs to be configured.
+
+- name: Check that the registry bucket is known
+  ansible.builtin.assert:
+    that:
+      - registry.bucket | length > 0
+    fail_msg: "registry.bucket is empty: export REGISTRY_BUCKET=$(terraform output -raw registry_bucket)"
+
+- name: Configure the image registry on the GCS bucket
+  kubernetes.core.k8s:
+    state: patched
+    api_version: imageregistry.operator.openshift.io/v1
+    kind: Config
+    name: cluster
+    definition:
+      spec:
+        managementState: Managed
+        replicas: "{{ registry.replicas | int }}"
+        rolloutStrategy: RollingUpdate
+        storage:
+          managementState: Unmanaged
+          gcs:
+            bucket: "{{ registry.bucket }}"
+            region: "{{ registry.region }}"
+
+- name: Wait for the image-registry cluster operator to be available
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: ClusterOperator
+    name: image-registry
+  register: registry_co
+  until: >-
+    registry_co.resources | length > 0 and
+    (registry_co.resources[0].status.conditions
+      | selectattr('type', 'equalto', 'Available') | map(attribute='status') | first) == 'True' and
+    (registry_co.resources[0].status.conditions
+      | selectattr('type', 'equalto', 'Progressing') | map(attribute='status') | first) == 'False'
+  retries: 30
+  delay: 10

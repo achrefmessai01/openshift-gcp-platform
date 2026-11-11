@@ -1,0 +1,11 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: subscriber-api
+  annotations:
+    haproxy.router.openshift.io/rate-limit-connections: "true"
+    haproxy.router.openshift.io/rate-limit-connections.rate-http: "200"
+spec:
+  # Stable production hostname under the cluster's apps wildcard domain
+  # (ingress wildcard certificate covers it; a custom domain would need its own TLS secret).
+  host: subscriber-api.apps.ocp.example.com

@@ -1,0 +1,32 @@
+meta {
+  name: 10 Create subscriber
+  type: http
+  seq: 10
+}
+
+post {
+  url: {{baseUrl}}/api/v1/subscribers
+  body: json
+  auth: none
+}
+
+headers {
+  X-API-Key: {{apiKey}}
+}
+
+body:json {
+  {
+    "msisdn": "{{msisdn}}",
+    "plan": "PREPAID_5GB"
+  }
+}
+
+tests {
+  test("subscriber is created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+  test("new subscriber is ACTIVE", function () {
+    expect(res.getBody().status).to.equal("ACTIVE");
+    expect(res.getBody().msisdn).to.equal(bru.getEnvVar("msisdn"));
+  });
+}

@@ -1,0 +1,36 @@
+apiVersion: elasticsearch.k8s.elastic.co/v1
+kind: Elasticsearch
+metadata:
+  name: logging
+  namespace: {{ logging.namespace }}
+spec:
+  version: "{{ logging.version }}"
+  nodeSets:
+    - name: default
+      count: {{ logging.es_nodes | int }}
+      config:
+        # mmap would require vm.max_map_count on the nodes (privileged init container);
+        # niofs keeps the pods within the restricted SCC.
+        node.store.allow_mmap: false
+      volumeClaimTemplates:
+        - metadata:
+            name: elasticsearch-data
+          spec:
+            accessModes: [ReadWriteOnce]
+            storageClassName: {{ logging.storage_class }}
+            resources:
+              requests:
+                storage: {{ logging.es_storage }}
+      podTemplate:
+        spec:
+          containers:
+            - name: elasticsearch
+              env:
+                - name: ES_JAVA_OPTS
+                  value: "-Xms{{ logging.es_heap }} -Xmx{{ logging.es_heap }}"
+              resources:
+                requests:
+                  cpu: "1"
+                  memory: {{ logging.es_memory }}
+                limits:
+                  memory: {{ logging.es_memory }}

@@ -1,0 +1,5 @@
+---
+htpasswd_file: "{{ lookup('ansible.builtin.env', 'TMPDIR') | default('/tmp', true) }}/{{ cluster_name }}-htpasswd"
+htpasswd_users: []
+admin_group_members: []
+access_token_max_age_seconds: 28800
