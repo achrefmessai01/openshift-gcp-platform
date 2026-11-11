@@ -1,0 +1,12 @@
+# Normalise line endings: LF in the repository and in working copies (scripts run on Linux
+# runners and in containers; CRLF would break shebangs and Makefile recipes).
+* text=auto eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.robot text eol=lf
+*.resource text eol=lf
+Makefile text eol=lf
+*.jmx text eol=lf
+*.png binary
+*.jpg binary
+*.pdf binary
