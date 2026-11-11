@@ -21,3 +21,7 @@ rules:
     max-spaces-inside: 1
   brackets:
     max-spaces-inside: 1
+  # Required by ansible-lint: file modes must be quoted strings ("0600"), never bare octals.
+  octal-values:
+    forbid-implicit-octal: true
+    forbid-explicit-octal: true
